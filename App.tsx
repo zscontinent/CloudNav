@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
   Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
-  Pin, Settings, Lock, CloudCog, Github, GitFork
+  Pin, Settings, Lock, CloudCog, Github, GitFork, MoreVertical
 } from 'lucide-react';
 import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, WebDavConfig, AIConfig } from './types';
 import { parseBookmarks } from './services/bookmarkParser';
@@ -29,10 +29,13 @@ function App() {
   // --- State ---
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [activeCategory, setActiveCategory] = useState<string>('all'); // Renamed from selectedCategory, used for sidebar highlight
   const [searchQuery, setSearchQuery] = useState('');
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  // Menu State
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   
   // Category Security State
   const [unlockedCategoryIds, setUnlockedCategoryIds] = useState<Set<string>>(new Set());
@@ -56,7 +59,6 @@ function App() {
       return {
           provider: 'gemini',
           // Try to use injected env if available, else empty.
-          // Note: In client-side build process.env might need specific config, but we leave it as fallback.
           apiKey: process.env.API_KEY || '', 
           baseUrl: '',
           model: 'gemini-2.5-flash'
@@ -79,6 +81,9 @@ function App() {
   // Sync State
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [authToken, setAuthToken] = useState<string>('');
+
+  const mainRef = useRef<HTMLDivElement>(null);
+  const isAutoScrollingRef = useRef(false);
   
   // --- Helpers & Sync Logic ---
 
@@ -205,6 +210,53 @@ function App() {
     initData();
   }, []);
 
+  // Close menu when clicking outside
+  useEffect(() => {
+      const handleClickOutside = (e: MouseEvent) => {
+          if (openMenuId) {
+              setOpenMenuId(null);
+          }
+      };
+      // Use capture to ensure we catch clicks anywhere
+      window.addEventListener('click', handleClickOutside);
+      return () => window.removeEventListener('click', handleClickOutside);
+  }, [openMenuId]);
+
+  // Scroll Spy Effect
+  useEffect(() => {
+    const handleScroll = () => {
+        if (isAutoScrollingRef.current) return;
+        if (!mainRef.current) return;
+        
+        const scrollPosition = mainRef.current.scrollTop + 150; // Offset
+
+        // If at top, highlight 'all'
+        if (mainRef.current.scrollTop < 80) {
+            setActiveCategory('all');
+            return;
+        }
+
+        // Iterate sections to find visible one
+        let currentCatId = 'all';
+        for (const cat of categories) {
+            const el = document.getElementById(`cat-${cat.id}`);
+            if (el && el.offsetTop <= scrollPosition && (el.offsetTop + el.offsetHeight) > scrollPosition) {
+                currentCatId = cat.id;
+                break;
+            }
+        }
+        
+        if (currentCatId !== 'all') {
+            setActiveCategory(currentCatId);
+        }
+    };
+
+    const mainEl = mainRef.current;
+    if (mainEl) mainEl.addEventListener('scroll', handleScroll);
+    return () => mainEl?.removeEventListener('scroll', handleScroll);
+  }, [categories]);
+
+
   const toggleTheme = () => {
     const newMode = !darkMode;
     setDarkMode(newMode);
@@ -278,18 +330,14 @@ function App() {
     setEditingLink(undefined);
   };
 
-  const handleDeleteLink = (id: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDeleteLink = (id: string) => {
     if (!authToken) { setIsAuthOpen(true); return; }
     if (confirm('确定删除此链接吗?')) {
       updateData(links.filter(l => l.id !== id), categories);
     }
   };
 
-  const togglePin = (id: string, e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
+  const togglePin = (id: string) => {
       if (!authToken) { setIsAuthOpen(true); return; }
       const updated = links.map(l => l.id === id ? { ...l, pinned: !l.pinned } : l);
       updateData(updated, categories);
@@ -302,25 +350,35 @@ function App() {
 
   // --- Category Management & Security ---
 
-  const handleCategoryClick = (cat: Category) => {
-      // If category has password and is NOT unlocked
-      if (cat.password && !unlockedCategoryIds.has(cat.id)) {
-          setCatAuthModalData(cat);
-          setSidebarOpen(false);
+  const scrollToCategory = (catId: string) => {
+      setActiveCategory(catId);
+      setSidebarOpen(false);
+      
+      if (catId === 'all') {
+          isAutoScrollingRef.current = true;
+          mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+          setTimeout(() => isAutoScrollingRef.current = false, 800);
           return;
       }
-      setSelectedCategory(cat.id);
-      setSidebarOpen(false);
+
+      const el = document.getElementById(`cat-${catId}`);
+      if (el) {
+          isAutoScrollingRef.current = true;
+          // Offset for sticky header
+          const top = el.offsetTop - 80;
+          mainRef.current?.scrollTo({ top, behavior: 'smooth' });
+          setTimeout(() => isAutoScrollingRef.current = false, 800);
+      }
   };
 
   const handleUnlockCategory = (catId: string) => {
       setUnlockedCategoryIds(prev => new Set(prev).add(catId));
-      setSelectedCategory(catId);
+      // Unlock triggers re-render, content becomes visible
   };
 
-  const handleUpdateCategories = (newCats: Category[]) => {
+  const handleUpdateCategories = (newCats: Category[], newLinks?: LinkItem[]) => {
       if (!authToken) { setIsAuthOpen(true); return; }
-      updateData(links, newCats);
+      updateData(newLinks || links, newCats);
   };
 
   const handleDeleteCategory = (catId: string) => {
@@ -351,7 +409,6 @@ function App() {
 
   // --- Filtering & Memo ---
 
-  // Helper to check if a category is "Locked" (Has password AND not unlocked)
   const isCategoryLocked = (catId: string) => {
       const cat = categories.find(c => c.id === catId);
       if (!cat || !cat.password) return false;
@@ -363,85 +420,109 @@ function App() {
       return links.filter(l => l.pinned && !isCategoryLocked(l.categoryId));
   }, [links, categories, unlockedCategoryIds]);
 
-  const displayedLinks = useMemo(() => {
+  const searchResults = useMemo(() => {
     let result = links;
     
-    // Security Filter: Always hide links from locked categories
-    result = result.filter(l => !isCategoryLocked(l.categoryId));
-
     // Search Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      return result.filter(l => 
+      result = result.filter(l => 
         l.title.toLowerCase().includes(q) || 
         l.url.toLowerCase().includes(q) ||
         (l.description && l.description.toLowerCase().includes(q))
       );
     }
-
-    // Category Filter
-    if (selectedCategory !== 'all') {
-      result = result.filter(l => l.categoryId === selectedCategory);
-    }
-    
-    return result.sort((a, b) => b.createdAt - a.createdAt);
-  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds]);
+    return result;
+  }, [links, searchQuery]);
 
 
   // --- Render Components ---
 
-  const renderLinkCard = (link: LinkItem) => (
-    <a
-        key={link.id}
-        href={link.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="group relative flex items-center gap-3 p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700/50 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
-        title={link.description || link.url} // Native tooltip fallback
-    >
-        {/* Compact Icon */}
-        <div className="w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-700 text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm font-bold uppercase shrink-0">
-            {link.icon ? <img src={link.icon} alt="" className="w-5 h-5"/> : link.title.charAt(0)}
-        </div>
-        
-        {/* Text Content */}
-        <div className="flex-1 min-w-0">
-            <h3 className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                {link.title}
-            </h3>
-            {link.description && (
-               <div className="tooltip-custom absolute left-0 -top-8 w-max max-w-[200px] bg-black text-white text-xs p-2 rounded opacity-0 invisible group-hover:visible group-hover:opacity-100 transition-all z-20 pointer-events-none truncate">
-                  {link.description}
-               </div>
-            )}
-        </div>
+  const renderLinkCard = (link: LinkItem) => {
+      const iconDisplay = link.icon ? (
+         <img 
+            src={link.icon} 
+            alt="" 
+            className="w-5 h-5 object-contain" 
+            onError={(e) => {
+                e.currentTarget.style.display = 'none';
+                e.currentTarget.parentElement!.innerText = link.title.charAt(0);
+            }}
+         />
+      ) : link.title.charAt(0);
 
-        {/* Hover Actions (Absolute Right or Flex) */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity absolute right-2 bg-white/90 dark:bg-slate-800/90 pl-2">
-            <button 
-                onClick={(e) => togglePin(link.id, e)}
-                className={`p-1 rounded-md transition-colors ${link.pinned ? 'text-blue-500 bg-blue-50' : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
-                title="置顶"
-            >
-                <Pin size={13} className={link.pinned ? "fill-current" : ""} />
-            </button>
-            <button 
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingLink(link); setIsModalOpen(true); }}
-                className="p-1 text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md"
-                title="编辑"
-            >
-                <Edit2 size={13} />
-            </button>
-            <button 
-                onClick={(e) => handleDeleteLink(link.id, e)}
-                className="p-1 text-slate-400 hover:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md"
-                title="删除"
-            >
-                <Trash2 size={13} />
-            </button>
-        </div>
-    </a>
-  );
+      const isMenuOpen = openMenuId === link.id;
+
+      return (
+        <a
+            key={link.id}
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group relative flex flex-col p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700/50 shadow-sm hover:shadow-lg hover:border-blue-200 dark:hover:border-slate-600 hover:-translate-y-0.5 transition-all duration-200 hover:bg-blue-50 dark:hover:bg-slate-750"
+            title={link.description || link.url}
+        >
+            <div className="flex items-center gap-3 mb-1.5 pr-6">
+                <div className="w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-700 text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm font-bold uppercase shrink-0 overflow-hidden">
+                    {iconDisplay}
+                </div>
+                <h3 className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate flex-1 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                    {link.title}
+                </h3>
+            </div>
+            
+            <div className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 h-4 w-full overflow-hidden">
+                {link.description || <span className="opacity-0">.</span>}
+            </div>
+
+            <div className="absolute top-2 right-2">
+                <button
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setOpenMenuId(isMenuOpen ? null : link.id);
+                    }}
+                    className={`p-1 rounded-md transition-colors ${isMenuOpen ? 'bg-slate-100 dark:bg-slate-700 text-blue-500' : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
+                >
+                    <MoreVertical size={16} />
+                </button>
+                
+                {isMenuOpen && (
+                    <div 
+                        className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-100 dark:border-slate-600 z-20 py-1 flex flex-col animate-in fade-in zoom-in duration-200 origin-top-right"
+                        onClick={(e) => {
+                            e.preventDefault(); 
+                            e.stopPropagation();
+                        }}
+                    >
+                        <button
+                            onClick={() => { togglePin(link.id); setOpenMenuId(null); }}
+                            className="flex items-center gap-2 px-3 py-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 w-full text-left"
+                        >
+                            <Pin size={12} className={link.pinned ? "fill-current text-blue-500" : ""} />
+                            <span>{link.pinned ? '取消置顶' : '置顶'}</span>
+                        </button>
+                        <button
+                            onClick={() => { setEditingLink(link); setIsModalOpen(true); setOpenMenuId(null); }}
+                            className="flex items-center gap-2 px-3 py-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 w-full text-left"
+                        >
+                            <Edit2 size={12} />
+                            <span>编辑</span>
+                        </button>
+                        <div className="h-px bg-slate-100 dark:bg-slate-700 my-1"></div>
+                        <button
+                            onClick={() => { handleDeleteLink(link.id); setOpenMenuId(null); }}
+                            className="flex items-center gap-2 px-3 py-2 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 w-full text-left"
+                        >
+                            <Trash2 size={12} />
+                            <span>删除</span>
+                        </button>
+                    </div>
+                )}
+            </div>
+        </a>
+      );
+  };
 
 
   return (
@@ -460,6 +541,7 @@ function App() {
         isOpen={isCatManagerOpen} 
         onClose={() => setIsCatManagerOpen(false)}
         categories={categories}
+        links={links}
         onUpdateCategories={handleUpdateCategories}
         onDeleteCategory={handleDeleteCategory}
       />
@@ -517,11 +599,11 @@ function App() {
         {/* Categories List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-hide">
             <button
-              onClick={() => { setSelectedCategory('all'); setSidebarOpen(false); }}
+              onClick={() => scrollToCategory('all')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                selectedCategory === 'all' 
+                activeCategory === 'all' 
                   ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <div className="p-1"><Icon name="LayoutGrid" size={18} /></div>
@@ -541,21 +623,23 @@ function App() {
 
             {categories.map(cat => {
                 const isLocked = cat.password && !unlockedCategoryIds.has(cat.id);
+                const isEmoji = cat.icon && cat.icon.length <= 4 && !/^[a-zA-Z]+$/.test(cat.icon);
+                
                 return (
                   <button
                     key={cat.id}
-                    onClick={() => handleCategoryClick(cat)}
+                    onClick={() => scrollToCategory(cat.id)}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all group ${
-                      selectedCategory === cat.id 
+                      activeCategory === cat.id 
                         ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
-                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
                     }`}
                   >
-                    <div className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${selectedCategory === cat.id ? 'bg-blue-100 dark:bg-blue-800' : 'bg-slate-100 dark:bg-slate-800'}`}>
-                      {isLocked ? <Lock size={16} className="text-amber-500" /> : <Icon name={cat.icon} size={16} />}
+                    <div className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${activeCategory === cat.id ? 'bg-blue-100 dark:bg-blue-800' : 'bg-slate-100 dark:bg-slate-800'}`}>
+                      {isLocked ? <Lock size={16} className="text-amber-500" /> : (isEmoji ? <span className="text-base leading-none">{cat.icon}</span> : <Icon name={cat.icon} size={16} />)}
                     </div>
                     <span className="truncate flex-1 text-left">{cat.name}</span>
-                    {selectedCategory === cat.id && <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>}
+                    {activeCategory === cat.id && <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>}
                   </button>
                 );
             })}
@@ -563,7 +647,6 @@ function App() {
 
         {/* Footer Actions */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 shrink-0">
-            
             <div className="grid grid-cols-3 gap-2 mb-2">
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsImportModalOpen(true); }}
@@ -573,7 +656,6 @@ function App() {
                     <Upload size={14} />
                     <span>导入</span>
                 </button>
-                
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsBackupModalOpen(true); }}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
@@ -582,7 +664,6 @@ function App() {
                     <CloudCog size={14} />
                     <span>备份</span>
                 </button>
-
                 <button 
                     onClick={() => setIsSettingsModalOpen(true)}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
@@ -600,7 +681,6 @@ function App() {
                  {syncStatus === 'error' && <AlertCircle className="w-3 h-3 text-red-500" />}
                  {authToken ? <span className="text-green-600">已同步</span> : <span className="text-amber-500">离线</span>}
                </div>
-
                <a 
                  href={GITHUB_REPO_URL} 
                  target="_blank" 
@@ -616,10 +696,12 @@ function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-slate-900 overflow-hidden relative">
-        
+      <main 
+          ref={mainRef}
+          className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-slate-900 overflow-y-auto relative scroll-smooth"
+      >
         {/* Header */}
-        <header className="h-16 px-4 lg:px-8 flex items-center justify-between bg-white/80 dark:bg-slate-800/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-700 sticky top-0 z-10 shrink-0">
+        <header className="h-16 px-4 lg:px-8 flex items-center justify-between bg-white/80 dark:bg-slate-800/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shrink-0">
           <div className="flex items-center gap-4 flex-1">
             <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 -ml-2 text-slate-600 dark:text-slate-300">
               <Menu size={24} />
@@ -658,10 +740,10 @@ function App() {
         </header>
 
         {/* Content Scroll Area */}
-        <div className="flex-1 overflow-y-auto p-4 lg:p-8 space-y-8">
+        <div className="p-4 lg:p-8 space-y-8">
             
-            {/* 1. Pinned Area (Custom Top Area) */}
-            {pinnedLinks.length > 0 && !searchQuery && (selectedCategory === 'all') && (
+            {/* 1. Pinned Area */}
+            {pinnedLinks.length > 0 && !searchQuery && (
                 <section>
                     <div className="flex items-center gap-2 mb-4">
                         <Pin size={16} className="text-blue-500 fill-blue-500" />
@@ -675,58 +757,69 @@ function App() {
                 </section>
             )}
 
-            {/* 2. Main Grid */}
-            <section>
-                 {(!pinnedLinks.length && !searchQuery && selectedCategory === 'all') && (
-                    <div className="mb-6 p-4 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg flex items-center justify-between">
-                         <div>
-                            <h1 className="text-xl font-bold">早安 👋</h1>
-                            <p className="text-sm opacity-90 mt-1">
-                                {links.length} 个链接 · {categories.length} 个分类
-                            </p>
-                         </div>
-                         <Icon name="Compass" size={48} className="opacity-20" />
-                    </div>
-                 )}
+            {/* 2. Main List - Stacked Categories */}
+            {categories.map(cat => {
+                // Filter links for this category based on search
+                let catLinks = searchResults.filter(l => l.categoryId === cat.id);
+                // Security check
+                const isLocked = cat.password && !unlockedCategoryIds.has(cat.id);
+                
+                // If search is active and no links match, don't render category
+                if (searchQuery && catLinks.length === 0) return null;
 
-                 <div className="flex items-center justify-between mb-4">
-                     <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                         {selectedCategory === 'all' 
-                            ? (searchQuery ? '搜索结果' : '所有链接') 
-                            : (
-                                <>
-                                    {categories.find(c => c.id === selectedCategory)?.name}
-                                    {isCategoryLocked(selectedCategory) && <Lock size={14} className="text-amber-500" />}
-                                </>
-                            )
-                         }
-                     </h2>
-                 </div>
-
-                 {displayedLinks.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-slate-400 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
-                        {isCategoryLocked(selectedCategory) ? (
-                            <>
-                                <Lock size={40} className="text-amber-400 mb-4" />
-                                <p>该目录已锁定</p>
-                                <button onClick={() => setCatAuthModalData(categories.find(c => c.id === selectedCategory) || null)} className="mt-4 px-4 py-2 bg-amber-500 text-white rounded-lg">输入密码解锁</button>
-                            </>
+                return (
+                    <section key={cat.id} id={`cat-${cat.id}`} className="scroll-mt-24">
+                        <div className="flex items-center gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
+                             <div className="text-slate-400">
+                                {cat.icon && cat.icon.length <= 4 && !/^[a-zA-Z]+$/.test(cat.icon) ? <span className="text-lg">{cat.icon}</span> : <Icon name={cat.icon} size={20} />}
+                             </div>
+                             <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200">
+                                 {cat.name}
+                             </h2>
+                             {isLocked && <Lock size={16} className="text-amber-500" />}
+                        </div>
+                        
+                        {isLocked ? (
+                             <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-8 flex flex-col items-center justify-center text-center">
+                                <div className="w-12 h-12 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center mb-4 text-amber-600 dark:text-amber-400">
+                                    <Lock size={24} />
+                                </div>
+                                <h3 className="text-slate-800 dark:text-slate-200 font-medium mb-1">私密目录</h3>
+                                <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">该分类已加密，需要验证密码才能查看内容</p>
+                                <button 
+                                    onClick={() => setCatAuthModalData(cat)}
+                                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
+                                >
+                                    输入密码解锁
+                                </button>
+                             </div>
                         ) : (
-                            <>
-                                <Search size={40} className="opacity-30 mb-4" />
-                                <p>没有找到相关内容</p>
-                                {selectedCategory !== 'all' && (
-                                    <button onClick={() => setIsModalOpen(true)} className="mt-4 text-blue-500 hover:underline">添加一个?</button>
+                             <>
+                                {catLinks.length === 0 ? (
+                                    <div className="text-center py-8 text-slate-400 text-sm italic">
+                                        暂无链接
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+                                        {catLinks.map(link => renderLinkCard(link))}
+                                    </div>
                                 )}
-                            </>
+                             </>
                         )}
-                    </div>
-                 ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
-                        {displayedLinks.map(link => renderLinkCard(link))}
-                    </div>
-                 )}
-            </section>
+                    </section>
+                );
+            })}
+            
+            {/* Empty State for Search */}
+            {searchQuery && searchResults.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                    <Search size={40} className="opacity-30 mb-4" />
+                    <p>没有找到相关内容</p>
+                    <button onClick={() => setIsModalOpen(true)} className="mt-4 text-blue-500 hover:underline">添加一个?</button>
+                </div>
+            )}
+
+            <div className="h-20"></div> {/* Bottom Spacer */}
         </div>
       </main>
 
@@ -735,6 +828,7 @@ function App() {
         onClose={() => { setIsModalOpen(false); setEditingLink(undefined); setPrefillLink(undefined); }}
         onSave={editingLink ? handleEditLink : handleAddLink}
         categories={categories}
+        existingLinks={links}
         initialData={editingLink || (prefillLink as LinkItem)}
         aiConfig={aiConfig}
       />

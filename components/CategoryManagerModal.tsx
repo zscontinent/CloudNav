@@ -1,12 +1,15 @@
+
 import React, { useState } from 'react';
-import { X, ArrowUp, ArrowDown, Trash2, Edit2, Plus, Check, Lock, Unlock } from 'lucide-react';
-import { Category } from '../types';
+import { X, ArrowUp, ArrowDown, Trash2, Edit2, Plus, Check, Lock, Merge, Smile } from 'lucide-react';
+import { Category, LinkItem } from '../types';
+import Icon from './Icon';
 
 interface CategoryManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
   categories: Category[];
-  onUpdateCategories: (newCategories: Category[]) => void;
+  links: LinkItem[];
+  onUpdateCategories: (newCategories: Category[], newLinks?: LinkItem[]) => void;
   onDeleteCategory: (id: string) => void;
 }
 
@@ -14,15 +17,22 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   isOpen, 
   onClose, 
   categories, 
+  links,
   onUpdateCategories,
   onDeleteCategory
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editIcon, setEditIcon] = useState('');
   const [editPassword, setEditPassword] = useState('');
   
   const [newCatName, setNewCatName] = useState('');
+  const [newCatIcon, setNewCatIcon] = useState('Folder');
   const [newCatPassword, setNewCatPassword] = useState('');
+
+  // Merge State
+  const [mergingCatId, setMergingCatId] = useState<string | null>(null);
+  const [targetMergeId, setTargetMergeId] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -39,7 +49,9 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   const startEdit = (cat: Category) => {
     setEditingId(cat.id);
     setEditName(cat.name);
+    setEditIcon(cat.icon || 'Folder');
     setEditPassword(cat.password || '');
+    setMergingCatId(null);
   };
 
   const saveEdit = () => {
@@ -47,6 +59,7 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     const newCats = categories.map(c => c.id === editingId ? { 
         ...c, 
         name: editName.trim(),
+        icon: editIcon.trim(),
         password: editPassword.trim() || undefined
     } : c);
     onUpdateCategories(newCats);
@@ -58,17 +71,41 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     const newCat: Category = {
       id: Date.now().toString(),
       name: newCatName.trim(),
-      icon: 'Folder',
+      icon: newCatIcon.trim() || 'Folder',
       password: newCatPassword.trim() || undefined
     };
     onUpdateCategories([...categories, newCat]);
     setNewCatName('');
+    setNewCatIcon('Folder');
     setNewCatPassword('');
+  };
+
+  const openMerge = (catId: string) => {
+      setMergingCatId(catId);
+      // Default target is first category that is not self
+      const firstTarget = categories.find(c => c.id !== catId);
+      if (firstTarget) setTargetMergeId(firstTarget.id);
+  };
+
+  const executeMerge = () => {
+      if (!mergingCatId || !targetMergeId) return;
+      if (mergingCatId === targetMergeId) return;
+
+      if (!confirm('确定合并吗？合并后原分类将被删除。')) return;
+
+      // 1. Move all links
+      const newLinks = links.map(l => l.categoryId === mergingCatId ? { ...l, categoryId: targetMergeId } : l);
+
+      // 2. Remove old category
+      const newCats = categories.filter(c => c.id !== mergingCatId);
+
+      onUpdateCategories(newCats, newLinks);
+      setMergingCatId(null);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col max-h-[85vh]">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col max-h-[85vh]">
         <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700">
           <h3 className="text-lg font-semibold dark:text-white">分类管理</h3>
           <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors">
@@ -78,7 +115,7 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
 
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {categories.map((cat, index) => (
-            <div key={cat.id} className="flex flex-col p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg group gap-2">
+            <div key={cat.id} className="flex flex-col p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg group gap-2 border border-slate-100 dark:border-slate-600">
               <div className="flex items-center gap-2">
                   {/* Order Controls */}
                   <div className="flex flex-col gap-1 mr-2">
@@ -98,18 +135,30 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
                     </button>
                   </div>
 
-                  {/* Name & Password Display */}
+                  {/* Name & Content */}
                   <div className="flex-1 min-w-0">
                     {editingId === cat.id ? (
                       <div className="flex flex-col gap-2">
-                          <input 
-                            type="text" 
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            className="w-full p-1.5 px-2 text-sm rounded border border-blue-500 dark:bg-slate-800 dark:text-white outline-none"
-                            placeholder="分类名称"
-                            autoFocus
-                          />
+                          <div className="flex gap-2">
+                              <div className="relative w-12 shrink-0">
+                                <input
+                                    type="text"
+                                    value={editIcon}
+                                    onChange={(e) => setEditIcon(e.target.value)}
+                                    className="w-full p-1.5 text-center text-sm rounded border border-blue-500 dark:bg-slate-800 dark:text-white outline-none"
+                                    placeholder="Icon"
+                                    title="Lucide图标名 或 Emoji"
+                                />
+                              </div>
+                              <input 
+                                type="text" 
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                className="flex-1 p-1.5 px-2 text-sm rounded border border-blue-500 dark:bg-slate-800 dark:text-white outline-none"
+                                placeholder="分类名称"
+                                autoFocus
+                              />
+                          </div>
                           <div className="flex items-center gap-2">
                               <Lock size={14} className="text-slate-400" />
                               <input 
@@ -121,36 +170,61 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
                               />
                           </div>
                       </div>
+                    ) : mergingCatId === cat.id ? (
+                        <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 p-2 rounded">
+                            <span className="text-sm dark:text-slate-200 whitespace-nowrap">合并到 &rarr;</span>
+                            <select 
+                                value={targetMergeId}
+                                onChange={(e) => setTargetMergeId(e.target.value)}
+                                className="flex-1 text-sm p-1 rounded border border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                            >
+                                {categories.filter(c => c.id !== cat.id).map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </select>
+                            <button onClick={executeMerge} className="text-xs bg-blue-600 text-white px-2 py-1 rounded">确认</button>
+                            <button onClick={() => setMergingCatId(null)} className="text-xs text-slate-500 px-2 py-1">取消</button>
+                        </div>
                     ) : (
-                      <div className="flex items-center gap-2">
-                          <span className="font-medium dark:text-slate-200 truncate">{cat.name}</span>
-                          {cat.password && (
-                              <span title="已加密" className="flex items-center">
-                                <Lock size={12} className="text-amber-500" />
-                              </span>
-                          )}
+                      <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded bg-white dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-600">
+                             {cat.icon && cat.icon.length <= 4 && !/^[a-zA-Z]+$/.test(cat.icon) 
+                                ? <span className="text-lg">{cat.icon}</span> 
+                                : <Icon name={cat.icon} size={16} />
+                             }
+                          </div>
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-2">
+                                <span className="font-medium dark:text-slate-200 truncate">{cat.name}</span>
+                                {cat.password && <Lock size={12} className="text-amber-500" />}
+                            </div>
+                            <span className="text-xs text-slate-400">{links.filter(l => l.categoryId === cat.id).length} 个链接</span>
+                          </div>
                       </div>
                     )}
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-1 self-start mt-1">
-                    {editingId === cat.id ? (
-                       <button onClick={saveEdit} className="text-green-500 hover:bg-green-50 dark:hover:bg-slate-600 p-1.5 rounded bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-600"><Check size={16}/></button>
-                    ) : (
-                       <>
-                        <button onClick={() => startEdit(cat)} className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-slate-200 dark:hover:bg-slate-600 rounded">
+                  {editingId !== cat.id && mergingCatId !== cat.id && (
+                      <div className="flex items-center gap-1 self-start mt-2">
+                        <button onClick={() => startEdit(cat)} className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-slate-200 dark:hover:bg-slate-600 rounded" title="编辑">
                             <Edit2 size={14} />
+                        </button>
+                        <button onClick={() => openMerge(cat.id)} className="p-1.5 text-slate-400 hover:text-purple-500 hover:bg-slate-200 dark:hover:bg-slate-600 rounded" title="合并到其他分类">
+                            <Merge size={14} />
                         </button>
                         <button 
                         onClick={() => { if(confirm(`确定删除"${cat.name}"分类吗？该分类下的书签将移动到"常用推荐"。`)) onDeleteCategory(cat.id); }}
                         className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-slate-200 dark:hover:bg-slate-600 rounded"
+                        title="删除"
                         >
                         <Trash2 size={14} />
                         </button>
-                       </>
-                    )}
-                  </div>
+                      </div>
+                  )}
+                  {editingId === cat.id && (
+                       <button onClick={saveEdit} className="self-start mt-2 text-green-500 hover:bg-green-50 dark:hover:bg-slate-600 p-1.5 rounded bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-600"><Check size={16}/></button>
+                  )}
               </div>
             </div>
           ))}
@@ -159,13 +233,23 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
         <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
            <label className="text-xs font-semibold text-slate-500 uppercase mb-2 block">添加新分类</label>
            <div className="flex flex-col gap-2">
-             <input 
-                type="text"
-                value={newCatName}
-                onChange={(e) => setNewCatName(e.target.value)}
-                placeholder="分类名称"
-                className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-             />
+             <div className="flex gap-2">
+                 <input 
+                    type="text"
+                    value={newCatIcon}
+                    onChange={(e) => setNewCatIcon(e.target.value)}
+                    placeholder="Icon"
+                    className="w-16 p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white text-sm text-center outline-none"
+                    title="图标名称或Emoji"
+                 />
+                 <input 
+                    type="text"
+                    value={newCatName}
+                    onChange={(e) => setNewCatName(e.target.value)}
+                    placeholder="分类名称"
+                    className="flex-1 p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                 />
+             </div>
              <div className="flex gap-2">
                  <div className="flex-1 relative">
                     <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />

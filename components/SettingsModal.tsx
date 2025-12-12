@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check } from 'lucide-react';
-import { AIConfig, LinkItem } from '../types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, List, GripVertical, Filter } from 'lucide-react';
+import { AIConfig, LinkItem, Category, DEFAULT_CATEGORIES } from '../types';
 import { generateLinkDescription } from '../services/geminiService';
 
 interface SettingsModalProps {
@@ -16,7 +16,7 @@ interface SettingsModalProps {
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
     isOpen, onClose, config, onSave, links, onUpdateLinks 
 }) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'tools'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'tools' | 'links'>('ai');
   const [localConfig, setLocalConfig] = useState<AIConfig>(config);
   
   // Bulk Generation State
@@ -27,9 +27,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   // Tools State
   const [password, setPassword] = useState('');
   const [domain, setDomain] = useState('');
-  const [showExtCode, setShowExtCode] = useState(true);
+  const [browserType, setBrowserType] = useState<'chrome' | 'firefox'>('chrome');
   
-  // Copy feedback states
+  // Link Management State
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [filterCategory, setFilterCategory] = useState<string>('all');
+  
+  const availableCategories = useMemo(() => {
+      const catIds = Array.from(new Set(links.map(l => l.categoryId)));
+      return catIds;
+  }, [links]);
+
   const [copiedStates, setCopiedStates] = useState<{[key: string]: boolean}>({});
 
   useEffect(() => {
@@ -41,6 +49,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       setDomain(window.location.origin);
       const storedToken = localStorage.getItem('cloudnav_auth_token');
       if (storedToken) setPassword(storedToken);
+      setDraggedId(null);
+      setFilterCategory('all');
     }
   }, [isOpen, config]);
 
@@ -103,18 +113,70 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       }, 2000);
   };
 
-  // --- Chrome Extension Code Generators ---
+  // --- Drag and Drop Logic ---
 
-  const extManifest = `{
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+      setDraggedId(id);
+      e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetId: string) => {
+      e.preventDefault(); 
+      if (!draggedId || draggedId === targetId) return;
+      
+      const newLinks = [...links];
+      const sourceIndex = newLinks.findIndex(l => l.id === draggedId);
+      const targetIndex = newLinks.findIndex(l => l.id === targetId);
+
+      if (sourceIndex === -1 || targetIndex === -1) return;
+
+      const [movedItem] = newLinks.splice(sourceIndex, 1);
+      newLinks.splice(targetIndex, 0, movedItem);
+      
+      onUpdateLinks(newLinks);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      setDraggedId(null);
+  };
+
+  const filteredLinks = useMemo(() => {
+      if (filterCategory === 'all') return links;
+      return links.filter(l => l.categoryId === filterCategory);
+  }, [links, filterCategory]);
+
+  // --- Extension Generators ---
+
+  const chromeManifest = `{
   "manifest_version": 3,
   "name": "CloudNav Assistant",
-  "version": "3.0",
+  "version": "3.1",
   "permissions": ["activeTab"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Save to CloudNav"
   }
 }`;
+
+  const firefoxManifest = `{
+  "manifest_version": 3,
+  "name": "CloudNav Assistant",
+  "version": "3.1",
+  "permissions": ["activeTab"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cloudnav@example.com",
+      "strict_min_version": "109.0"
+    }
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save to CloudNav"
+  }
+}`;
+
+  const extManifest = browserType === 'chrome' ? chromeManifest : firefoxManifest;
 
   const extPopupHtml = `<!DOCTYPE html>
 <html>
@@ -129,6 +191,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     button:hover { background: #2563eb; }
     button:disabled { background: #94a3b8; cursor: not-allowed; }
     #status { margin-top: 12px; text-align: center; font-size: 12px; min-height: 18px; }
+    #warning { color: #f59e0b; font-size: 12px; margin-bottom: 10px; display: none; }
     .error { color: #ef4444; }
     .success { color: #22c55e; }
   </style>
@@ -136,6 +199,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 <body>
   <h3>Save to CloudNav</h3>
   
+  <div id="warning">⚠️ This URL already exists!</div>
+
   <label>Title</label>
   <input type="text" id="title" placeholder="Website Title">
   
@@ -161,17 +226,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   const catSelect = document.getElementById('category');
   const saveBtn = document.getElementById('saveBtn');
   const statusDiv = document.getElementById('status');
+  const warningDiv = document.getElementById('warning');
   
   let currentTabUrl = '';
 
+  // API handling for both Chrome and Firefox
+  const browserAPI = window.chrome || window.browser;
+
   // 1. Get Current Tab Info
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab) {
-    titleInput.value = tab.title || '';
-    currentTabUrl = tab.url || '';
+  if (browserAPI && browserAPI.tabs) {
+      const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]) {
+        titleInput.value = tabs[0].title || '';
+        currentTabUrl = tabs[0].url || '';
+      }
   }
 
-  // 2. Fetch Categories from CloudNav
+  // 2. Fetch Data (Categories & Check Duplicates)
   try {
     const res = await fetch(\`\${CONFIG.apiBase}/api/storage\`, {
       headers: { 'x-auth-password': CONFIG.password }
@@ -181,8 +252,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     const data = await res.json();
     
+    // Check Duplicate
+    if (data.links) {
+        const cleanCurrent = currentTabUrl.replace(/\/$/, '').toLowerCase();
+        const exists = data.links.some(l => l.url.replace(/\/$/, '').toLowerCase() === cleanCurrent);
+        if (exists) {
+            warningDiv.style.display = 'block';
+            saveBtn.textContent = 'Save Anyway (Duplicate)';
+        }
+    }
+
+    // Populate Categories
     catSelect.innerHTML = '';
-    // Sort categories: Common first, then others
     const sorted = data.categories.sort((a,b) => {
         if(a.id === 'common') return -1;
         if(b.id === 'common') return 1;
@@ -196,7 +277,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       catSelect.appendChild(opt);
     });
 
-    // Select 'common' by default if exists
     catSelect.value = 'common';
 
   } catch (e) {
@@ -262,6 +342,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <Bot size={18} /> AI 设置
               </button>
               <button 
+                onClick={() => setActiveTab('links')}
+                className={`text-sm font-semibold flex items-center gap-2 pb-1 transition-colors ${activeTab === 'links' ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500' : 'text-slate-500 dark:text-slate-400'}`}
+              >
+                <List size={18} /> 链接管理
+              </button>
+              <button 
                 onClick={() => setActiveTab('tools')}
                 className={`text-sm font-semibold flex items-center gap-2 pb-1 transition-colors ${activeTab === 'tools' ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500' : 'text-slate-500 dark:text-slate-400'}`}
               >
@@ -273,7 +359,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           </button>
         </div>
 
-        <div className="p-6 space-y-6 overflow-y-auto min-h-[300px]">
+        <div className="p-6 space-y-6 overflow-y-auto min-h-[300px] flex-1">
             
             {activeTab === 'ai' && (
                 <>
@@ -393,6 +479,57 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </>
             )}
 
+            {activeTab === 'links' && (
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                         <p className="text-xs text-slate-500">拖拽调整顺序</p>
+                         <div className="flex items-center gap-2">
+                             <Filter size={14} className="text-slate-400" />
+                             <select 
+                                value={filterCategory}
+                                onChange={(e) => setFilterCategory(e.target.value)}
+                                className="text-sm p-1.5 rounded border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none"
+                             >
+                                <option value="all">所有分类</option>
+                                {availableCategories.map(catId => (
+                                    <option key={catId} value={catId}>
+                                        {/* Try to match name from defaults or just use ID */}
+                                        {DEFAULT_CATEGORIES.find(c => c.id === catId)?.name || catId}
+                                    </option>
+                                ))}
+                             </select>
+                         </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                        {filteredLinks.length === 0 && <p className="text-sm text-center text-slate-400 py-8">该分类下暂无链接</p>}
+                        {filteredLinks.map((link) => (
+                            <div 
+                                key={link.id} 
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, link.id)}
+                                onDragOver={(e) => handleDragOver(e, link.id)}
+                                onDrop={handleDrop}
+                                className={`flex items-center gap-3 p-2 bg-slate-50 dark:bg-slate-700/50 rounded-lg group cursor-move transition-all border ${
+                                    draggedId === link.id ? 'opacity-50 border-blue-500 border-dashed' : 'border-transparent hover:border-slate-200 dark:hover:border-slate-600'
+                                }`}
+                            >
+                                <div className="text-slate-400 cursor-move">
+                                    <GripVertical size={16} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-medium text-sm truncate dark:text-slate-200">{link.title}</div>
+                                    <div className="text-xs text-slate-400 truncate">{link.url}</div>
+                                </div>
+                                <div className="text-xs text-slate-400 px-2 bg-slate-200 dark:bg-slate-800 rounded">
+                                     {DEFAULT_CATEGORIES.find(c => c.id === link.categoryId)?.name || link.categoryId}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {activeTab === 'tools' && (
                 <div className="space-y-6">
                     <div className="space-y-3">
@@ -409,19 +546,35 @@ document.addEventListener('DOMContentLoaded', async () => {
                     </div>
 
                     <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
-                        <h4 className="font-bold dark:text-white mb-2 text-sm flex items-center gap-2">
-                            <Box size={16} /> Chrome 扩展 (弹窗选择版)
-                        </h4>
+                        <div className="flex items-center justify-between mb-4">
+                            <h4 className="font-bold dark:text-white text-sm flex items-center gap-2">
+                                <Box size={16} /> 浏览器扩展 (弹窗选择版)
+                            </h4>
+                            <div className="flex bg-slate-100 dark:bg-slate-700 rounded-lg p-1 text-xs font-medium">
+                                <button 
+                                    onClick={() => setBrowserType('chrome')}
+                                    className={`px-3 py-1 rounded-md transition-all ${browserType === 'chrome' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500 dark:text-slate-400'}`}
+                                >
+                                    Chrome / Edge
+                                </button>
+                                <button 
+                                    onClick={() => setBrowserType('firefox')}
+                                    className={`px-3 py-1 rounded-md transition-all ${browserType === 'firefox' ? 'bg-white dark:bg-slate-600 shadow text-orange-600 dark:text-orange-300' : 'text-slate-500 dark:text-slate-400'}`}
+                                >
+                                    Firefox
+                                </button>
+                            </div>
+                        </div>
+                        
                         <p className="text-xs text-slate-500 mb-4">
-                            在本地创建一个文件夹，创建以下 3 个文件，然后使用“加载已解压的扩展程序”安装。
-                            <br/>此扩展允许您点击图标后<strong>手动选择分类</strong>保存。
+                            在本地创建一个文件夹，创建以下 3 个文件，然后使用“加载已解压的扩展程序”(Chrome) 或 “临时加载附加组件”(Firefox) 安装。
                         </p>
                         
                         <div className="space-y-4 animate-in fade-in zoom-in duration-300">
                             {/* File 1: Manifest */}
                             <div>
                                 <div className="flex justify-between items-center mb-1">
-                                    <span className="text-xs font-mono font-bold text-slate-500">1. manifest.json</span>
+                                    <span className="text-xs font-mono font-bold text-slate-500">1. manifest.json ({browserType})</span>
                                     <button 
                                         onClick={() => handleCopy(extManifest, 'manifest')}
                                         className="text-[10px] flex items-center gap-1 px-2 py-1 rounded bg-slate-100 dark:bg-slate-700 hover:bg-blue-100 text-slate-600 dark:text-slate-300"
