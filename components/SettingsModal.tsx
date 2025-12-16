@@ -233,9 +233,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     const json: any = {
         manifest_version: 3,
         name: localSiteSettings.navTitle || "CloudNav Assistant",
-        version: "1.5", // Incremented version to force update
+        version: "1.6", // Bump version to encourage update
         description: "CloudNav 侧边栏导航与书签助手",
-        permissions: ["activeTab", "scripting", "sidePanel", "storage", "favicon", "contextMenus"],
+        permissions: ["activeTab", "scripting", "sidePanel", "storage", "favicon"], // Removed 'contextMenus'
         background: {
             service_worker: "background.js"
         },
@@ -272,34 +272,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     return JSON.stringify(json, null, 2);
   };
 
-  const extBackgroundJs = `// background.js - Handles Context Menus
+  const extBackgroundJs = `// background.js - CloudNav Assistant
+// 核心逻辑已移至 manifest.json 和 popup/sidebar.js
+// 此文件保留用于 Service Worker 初始化
 
-// 初始化上下文菜单
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'openSidePanel',
-    title: '打开侧边栏 (Open Side Panel)',
-    contexts: ['all']
-  });
+  console.log('CloudNav Extension Installed');
 });
 
-// 监听菜单点击
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === 'openSidePanel') {
-    // 强制在当前窗口打开侧边栏
-    // 注意: Chrome API 目前仅支持 "open"，不支持通过 API "close" 或 "toggle"
-    // 用户必须使用快捷键 Ctrl+Shift+E 来进行切换(关闭)
-    chrome.sidePanel.open({ windowId: tab.windowId });
-  }
-});
-
-// 监听快捷键 (可选，_execute_side_panel 通常由浏览器直接处理，不需要此监听，但为了兼容性保留)
-chrome.commands.onCommand.addListener((command) => {
-  if (command === '_execute_side_panel') {
-    // 这里的代码可能不会执行，因为 _execute_side_panel 是系统保留动作
-    console.log('Toggle Side Panel Command');
-  }
-});
+// 提示: 侧边栏可以通过快捷键 Ctrl+Shift+E (需要设置) 
+// 或点击 Chrome 工具栏的 "侧边栏" 图标 -> 选择 CloudNav 打开。
 `;
 
   const extPopupHtml = `<!DOCTYPE html>
@@ -1149,7 +1131,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                         )}。
                                     </li>
                                     <li>点击 "<strong>加载已解压的扩展程序</strong>"，选择该文件夹。</li>
-                                    {browserType === 'chrome' && <li><strong>重要:</strong> 如果之前已安装，请先点击 "移除" 或 "刷新" 按钮，并重新加载文件夹以确保 shortcuts 配置生效。</li>}
+                                    {browserType === 'chrome' && <li className="text-red-600 dark:text-red-400 font-bold">重要提示：如果之前已安装，必须先点击 "移除" 按钮卸载旧版，然后重新加载文件夹。仅点击 "刷新" 按钮无法更新快捷键注册。</li>}
                                 </ol>
                                 
                                 <div className="mt-4 mb-4">
@@ -1167,11 +1149,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     <div className="font-bold flex items-center gap-2"><Keyboard size={16}/> 快捷键 Ctrl+Shift+E 设置:</div>
                                     <p>如果快捷键未生效，请前往 Chrome 快捷键设置 (<code className="bg-white/50 dark:bg-black/20 px-1 rounded">chrome://extensions/shortcuts</code>) 检查。</p>
                                     <p>务必将快捷键绑定到 <strong>"打开/关闭侧边栏 (Toggle Side Panel)"</strong>。</p>
-                                    
-                                    <div className="mt-2 pt-2 border-t border-amber-200 dark:border-amber-800/50 text-xs flex flex-col gap-1">
-                                        <div className="font-bold flex items-center gap-1"><AlertTriangle size={12}/> 右键菜单说明:</div>
-                                        <p>右键菜单 "打开侧边栏" 受浏览器限制，<strong>只能打开，不能关闭</strong>。</p>
-                                        <p>想要<strong>切换(关闭)</strong>侧边栏，请使用快捷键 <strong>Ctrl+Shift+E</strong>。</p>
+                                    <div className="mt-2 pt-2 border-t border-amber-200 dark:border-amber-800/50 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                                        注意：自定义右键菜单已移除。请使用 Chrome 原生的侧边栏按钮或上方快捷键打开。
                                     </div>
                                 </div>
                             </div>
